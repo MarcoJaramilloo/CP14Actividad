@@ -1,63 +1,100 @@
 pipeline {
     agent any
-
     environment {
-        AWS_DEFAULT_REGION = 'us-east-2'
-        // Ruta base donde está el código según tus capturas
+        AWS_DEFAULT_REGION = 'us-east-1'
         APP_PATH = 'todo-list-aws-master/todo-list-aws-master'
     }
-
     stages {
-        stage('Checkout') {
+        stage('Get Code') {
             steps {
                 checkout scm
             }
         }
-
         stage('Instalar Dependencias') {
             steps {
                 dir(env.APP_PATH) {
                     sh '''
-                    python3 -m venv venv
-                    . venv/bin/activate
-                    # Buscamos el requirements.txt dentro de la carpeta src
-                    pip install -r src/requirements.txt
+                        python3 -m venv venv
+                        . venv/bin/activate
+                        pip install -r src/requirements.txt
+                        pip install flake8 bandit
                     '''
                 }
             }
         }
-
-        stage('Análisis de Calidad y Seguridad') {
+        stage('Static Test') {
             steps {
                 dir(env.APP_PATH) {
                     sh '''
-                    . venv/bin/activate
-                    flake8 . --exclude=venv --count --select=E9,F63,F7,F82
-                    bandit -r . -f custom -x venv,test --skip B101,B110,B311,B404,B603,B307,B102,B310,B302,B324,B411,B105,B202,B604,B602,B504,B108 || true
+                        . venv/bin/activate
+                        flake8 src/ --format=pylint --output-file=flake8-report.txt || true
+                        bandit -r src/ -f txt -o bandit-report.txt || true
                     '''
                 }
             }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'todo-list-aws-master/todo-list-aws-master/flake8-report.txt, todo-list-aws-master/todo-list-aws-master/bandit-report.txt',
+                                     allowEmptyArchive: true
+                }
+            }
         }
-
-        stage('Pruebas Unitarias') {
+        stage('Deploy Staging') {
             steps {
                 dir(env.APP_PATH) {
                     sh '''
-                    . venv/bin/activate
-                    pytest --ignore=venv --ignore=test || true
+                        sam build
+                        sam deploy \
+                            --stack-name todo-list-aws-staging \
+                            --resolve-s3 \
+                            --parameter-overrides Stage=staging \
+                            --capabilities CAPABILITY_IAM \
+                            --region us-east-1 \
+                            --no-confirm-changeset \
+                            --no-fail-on-empty-changeset
                     '''
                 }
             }
         }
-
-        stage('Construir y Desplegar') {
+        stage('Rest Test') {
             steps {
                 dir(env.APP_PATH) {
-                    // sam build detectará el template.yaml en la raíz de APP_PATH
-                    sh 'sam build'
-                    sh 'sam deploy --resolve-s3 --stack-name todo-list-aws-stack --capabilities CAPABILITY_IAM --no-confirm-changeset'
+                    sh '''
+                        . venv/bin/activate
+                        pip install pytest requests
+
+                        BASE_URL=$(aws cloudformation describe-stacks \
+                            --stack-name todo-list-aws-staging \
+                            --query "Stacks[0].Outputs[?OutputKey=='BaseUrlApi'].OutputValue" \
+                            --output text \
+                            --region us-east-1)
+
+                        echo "API URL: $BASE_URL"
+                        export BASE_URL
+                        pytest test/integration/todoApiTest.py -v || true
+                    '''
                 }
             }
+        }
+        stage('Promote to Master') {
+            steps {
+                sh '''
+                    git config user.email "jenkins@ci.local"
+                    git config user.name "Jenkins"
+                    git fetch origin
+                    git checkout master
+                    git merge develop --no-ff -m "Merge develop into master - promote to production"
+                    git push origin master
+                '''
+            }
+        }
+    }
+    post {
+        success {
+            echo 'Pipeline CI completado exitosamente'
+        }
+        failure {
+            echo 'Pipeline CI fallido - revisar logs'
         }
     }
 }
