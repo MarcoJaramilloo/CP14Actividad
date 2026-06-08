@@ -39,23 +39,22 @@ pipeline {
                 }
             }
         }
-        stage('Deploy Staging') {
-            steps {
-                dir(env.APP_PATH) {
-                    sh '''
-                        sam build
-                        sam deploy \
-                            --stack-name todo-list-aws-staging \
-                            --resolve-s3 \
-                            --parameter-overrides Stage=staging \
-                            --capabilities CAPABILITY_IAM \
-                            --region us-east-1 \
-                            --no-confirm-changeset \
-                            --no-fail-on-empty-changeset
-                    '''
-                }
-            }
+       stage('Deploy Staging') {
+    steps {
+        dir(env.APP_PATH) {
+            sh '''
+                sam build
+                sam deploy \
+                    --stack-name todo-list-aws-staging \
+                    --parameter-overrides Stage=staging \
+                    --capabilities CAPABILITY_IAM \
+                    --region us-east-1 \
+                    --no-confirm-changeset \
+                    --no-fail-on-empty-changeset
+            '''
         }
+    }
+}
         stage('Rest Test') {
             steps {
                 dir(env.APP_PATH) {
